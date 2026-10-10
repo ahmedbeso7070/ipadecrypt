@@ -1,6 +1,7 @@
 package unicorn
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -227,4 +228,16 @@ func readUint32(address uintptr) uint32 {
 
 func readUint64(address uintptr) uint64 {
 	return binary.LittleEndian.Uint64(unsafe.Slice((*byte)(unsafe.Pointer(address)), 8))
+}
+
+func findImagePattern(base, imageSize uintptr, pattern []byte) (uintptr, error) {
+	image := unsafe.Slice((*byte)(unsafe.Pointer(base)), imageSize)
+	first := bytes.Index(image, pattern)
+	if first < 0 {
+		return 0, errors.New("instruction pattern was not found")
+	}
+	if bytes.Index(image[first+len(pattern):], pattern) >= 0 {
+		return 0, errors.New("instruction pattern is not unique")
+	}
+	return base + uintptr(first), nil
 }
