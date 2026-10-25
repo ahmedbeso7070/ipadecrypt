@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/londek/ipadecrypt/internal/store"
 	cookiejar "github.com/juju/persistent-cookiejar"
 )
 
 type Client struct {
 	jar                 *cookiejar.Jar
 	http                *http.Client
+	backend             *store.Backend
 	actionSignerFactory ActionSignerFactory
+	kbsync              kbsyncStore
 }
 
 func New(cookiesFile string) (*Client, error) {
@@ -21,6 +24,7 @@ func New(cookiesFile string) (*Client, error) {
 		return nil, err
 	}
 
+	// Plain client for CDN byte transfers (signed URLs; no attestation needed).
 	hc := &http.Client{
 		Jar: jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -32,7 +36,17 @@ func New(cookiesFile string) (*Client, error) {
 		},
 	}
 
-	return &Client{jar: jar, http: hc, actionSignerFactory: defaultActionSignerFactory}, nil
+	// Store API requests are built and attested by the emulated AppleMediaServices
+	// framework in the backend; the SAP signer (used for authenticate) runs its
+	// own setup/cert exchange through the backend's "api" executor.
+	backend := store.New(jar, macAddress)
+
+	return &Client{
+		jar:                 jar,
+		http:                hc,
+		backend:             backend,
+		actionSignerFactory: frameworkActionSignerFactory(backend.Client("api")),
+	}, nil
 }
 
 // guid returns the Configurator-shaped GUID: uppercase MAC address, no colons.

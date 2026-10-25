@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	apphttp "github.com/londek/ipadecrypt/internal/apphttp"
 )
 
 type loginResult struct {
@@ -69,23 +71,18 @@ func (c *Client) Login(email, password, authCode string) (*Account, error) {
 			requestAttempt = 1
 		}
 
-		body, err := plistBody(map[string]any{
+		out = loginResult{}
+
+		res, err = c.send("authenticate", http.MethodPost, url, map[string]string{
+			"Content-Type": "application/x-www-form-urlencoded",
+		}, &apphttp.XMLPayload{Content: map[string]any{
 			"appleId":  email,
 			"attempt":  strconv.Itoa(requestAttempt),
 			"guid":     guid,
 			"password": password + strings.ReplaceAll(authCode, " ", ""),
 			"rmp":      "0",
 			"why":      "signIn",
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		out = loginResult{}
-
-		res, err = c.send(http.MethodPost, url, map[string]string{
-			"Content-Type": "application/x-www-form-urlencoded",
-		}, body, signer, formatXML, &out)
+		}}, signer, formatXML, &out)
 		if err != nil {
 			return nil, fmt.Errorf("login: %w", err)
 		}
@@ -157,11 +154,11 @@ func interpretLogin(res *http.Response, out *loginResult, attempt int, authCode 
 			return "", false, errors.New(out.CustomerMessage)
 		}
 
-		return "", false, errors.New("login failed")
+		return "", false, fmt.Errorf("login failed (failureType %s)", out.FailureType)
 	}
 
 	if res.StatusCode != http.StatusOK || out.PasswordToken == "" || out.DirectoryServicesID == "" {
-		return "", false, errors.New("login failed")
+		return "", false, fmt.Errorf("login failed (HTTP %d)", res.StatusCode)
 	}
 
 	return "", false, nil

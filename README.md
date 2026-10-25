@@ -16,30 +16,38 @@
 
 </div>
 
+## How it works
+
+ipadecrypt decrypts FairPlay apps **on your computer** - no device in the loop
+for day-to-day use. A jailbroken device is needed exactly **once per Apple
+account**, during `bootstrap`, to mint a reusable 16-byte account credential.
+After that, downloading and decrypting any app for that account is fully
+offline.
+
 ## Requirements
 
 ### On your computer
-- Jailbroken iPhone reachable over the network
+- Nothing special for decrypting. For the one-time mint: a jailbroken iPhone
+  reachable over the network (or over USB with `iproxy`).
 
-### On the jailbroken iPhone
-All installable through Sileo:
-
-| Package | Purpose |
+### On the jailbroken iPhone (one-time mint only)
+| Requirement | Purpose |
 |---|---|
-| **OpenSSH** | SSH server - ipadecrypt drives the device over SSH |
-| **AppSync Unified** | Bypasses installd's signature check (add repo `https://lukezgd.github.io/repo`) |
-| **appinst** | Installs modified IPAs on the device (add repo `https://lukezgd.github.io/repo`) |
+| **OpenSSH with root access** | The mint connects over root SSH (install OpenSSH from Sileo) |
+| **≥1 owned App Store app installed** | Bought with the same Apple ID; used to trigger FairPlay once |
 
-> Tested on iOS 16.7.11 with palera1n rootless and Dopamine on iPhone 8 Plus. iOS 14 through 17 on A10–A14 devices are expected to work.
+> Tested on iOS 16.7.11 with palera1n rootless and Dopamine on iPhone 8 Plus. iOS 10+ is expected to work for minting; decryption itself runs anywhere.
 
 ## Install
 
 Download a prebuilt binary from the [releases page](https://github.com/londek/ipadecrypt/releases/latest).
 
-Using go install:
+Using go install. `@latest` resolves to the newest **stable** tag and skips
+pre-releases, so during the release-candidate phase pin the version explicitly
+(an older stable build predates App Store machine-signing and fails to log in):
 
 ```sh
-go install github.com/londek/ipadecrypt/cmd/ipadecrypt@latest
+go install github.com/londek/ipadecrypt/cmd/ipadecrypt@v0.9.0-rc1
 ```
 
 From source (refer to [BUILDING.md](BUILDING.md) for detailed instructions):
@@ -58,12 +66,13 @@ go build ./cmd/ipadecrypt
 ipadecrypt bootstrap
 ```
 
-A four-step interactive wizard:
+A two-step interactive wizard:
 
-1. **App Store sign-in** - Logs into App Store. Credentials stay local in `~/.ipadecrypt/config.json`.
-2. **Device connect** - SSH host / user / password; probes iOS version + arch.
-3. **Prerequisites** - verifies whether deps are installed.
-4. **Helper install** - uploads helper binary and verifies whether it runs.
+1. **App Store sign-in** - Logs into the App Store. Credentials stay local in `~/.ipadecrypt/config.json`. The first sign-in downloads and caches the Apple frameworks the App Store engine emulates (~tens of MB, range-extracted from a pinned macOS image) under `~/.cache/ipadecrypt/`; later runs reuse the cache.
+2. **Credential mint** - Connects once to your jailbroken device over root SSH and extracts the reusable account credential, cached under `~/.ipadecrypt/credentials/`.
+
+Run it again anytime; it skips minting if a credential is already cached (pass
+`--remint` to force). After bootstrap, no device is ever needed again.
 
 ### Decrypt an app
 
@@ -79,8 +88,8 @@ ipadecrypt versions <bundle-id|app-store-id|app-store-url>
 
 ## Known issues
 
-- [New, unsupported SC_Info format is shipped with some apps, ipadecrypt will fail to decrypt them.](https://github.com/londek/ipadecrypt/issues/34)
-- Due to arm64e PPL guards on A12+, some apps such as Apple's are not expected to work.
+- Only the supported SINF/SUPF license formats decrypt; apps shipping a newer, unsupported `SC_Info` format are skipped.
+- The credential is per Apple account: decrypting an app requires signing in with (and having minted from) the account that owns it.
 
 ## License
 
@@ -88,9 +97,9 @@ MIT.
 
 ## Prior art
 
+- [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt) - the offline FairPlay decryptor and credential-minting approach this release is a Go port of.
 - [majd/ipatool](https://github.com/majd/ipatool) - the Apple Configurator impersonation the App Store client is based on.
 - [34306/TrollDecryptJB](https://github.com/34306/TrollDecryptJB) - `task_for_pid` + `mach_vm_read` from a suspended spawn, entitlement set.
-- [akemin-dayo/AppSync](https://github.com/akemin-dayo/AppSync) - installd signature-bypass tweak + `appinst`.
 - [JohnCoates/flexdecrypt](https://github.com/JohnCoates/flexdecrypt) - the pre-iOS-16 approach that stopped working and prompted the pivot.
 
 ## AI Disclaimer

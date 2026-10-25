@@ -9,46 +9,62 @@ import (
 )
 
 type bagResult struct {
-	URLBag struct {
-		AuthEndpoint         string `plist:"authenticateAccount,omitempty"`
-		SAPSetupEndpoint     string `plist:"sign-sap-setup,omitempty"`
-		SAPSetupCertEndpoint string `plist:"sign-sap-setup-cert,omitempty"`
-		SAPVersion           string `plist:"sign-sap-version,omitempty"`
-	} `plist:"urlBag,omitempty"`
-	AuthEndpoint string `plist:"authenticateAccount,omitempty"`
+	URLBag urlBag `plist:"urlBag,omitempty"`
 }
 
-// bag fetches the App Store bag.xml and returns the current SAP signing config:
-// the authenticate endpoint to sign against plus the setup/certificate endpoints
-// and version used to establish the machine-signing session during Login.
-func (c *Client) bag() (SAPConfig, error) {
+type urlBag struct {
+	AuthEndpoint         string `plist:"authenticateAccount,omitempty"`
+	EntDownloadEndpoint  string `plist:"volumeStoreDownloadProduct,omitempty"`
+	RedownloadEndpoint   string `plist:"redownloadProduct,omitempty"`
+	UpdateEndpoint       string `plist:"updateProduct,omitempty"`
+	SAPSetupEndpoint     string `plist:"sign-sap-setup,omitempty"`
+	SAPSetupCertEndpoint string `plist:"sign-sap-setup-cert,omitempty"`
+	SAPVersion           string `plist:"sign-sap-version,omitempty"`
+}
+
+// fetchURLBag fetches the raw App Store bag.xml. The download fallback
+// endpoints it carries do not need the authenticate-specific SAP validation,
+// so this is kept separate from bag() and reused by the download chain.
+func (c *Client) fetchURLBag() (urlBag, error) {
 	g, err := guid()
 	if err != nil {
-		return SAPConfig{}, err
+		return urlBag{}, err
 	}
 
 	bagURL := fmt.Sprintf("https://%s%s?guid=%s", initDomain, initPath, g)
 
 	var out bagResult
 
-	res, err := c.send(http.MethodGet, bagURL, map[string]string{"Accept": "application/xml"}, nil, nil, formatXML, &out)
+	res, err := c.send("bag", http.MethodGet, bagURL, map[string]string{"Accept": "application/xml"}, nil, nil, formatXML, &out)
 	if err != nil {
-		return SAPConfig{}, fmt.Errorf("bag: %w", err)
+		return urlBag{}, fmt.Errorf("bag: %w", err)
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return SAPConfig{}, fmt.Errorf("bag: status %d", res.StatusCode)
+		return urlBag{}, fmt.Errorf("bag: status %d", res.StatusCode)
+	}
+
+	return out.URLBag, nil
+}
+
+// bag fetches the App Store bag.xml and returns the current SAP signing config:
+// the authenticate endpoint to sign against plus the setup/certificate endpoints
+// and version used to establish the machine-signing session during Login.
+func (c *Client) bag() (SAPConfig, error) {
+	out, err := c.fetchURLBag()
+	if err != nil {
+		return SAPConfig{}, err
 	}
 
 	config := SAPConfig{
-		AuthEndpoint:   out.URLBag.AuthEndpoint,
-		SetupURL:       out.URLBag.SAPSetupEndpoint,
-		CertificateURL: out.URLBag.SAPSetupCertEndpoint,
+		AuthEndpoint:   out.AuthEndpoint,
+		SetupURL:       out.SAPSetupEndpoint,
+		CertificateURL: out.SAPSetupCertEndpoint,
 	}
 
-	version, err := strconv.ParseUint(out.URLBag.SAPVersion, 10, 32)
+	version, err := strconv.ParseUint(out.SAPVersion, 10, 32)
 	if err != nil {
-		return SAPConfig{}, fmt.Errorf("bag: invalid SAP version %q: %w", out.URLBag.SAPVersion, err)
+		return SAPConfig{}, fmt.Errorf("bag: invalid SAP version %q: %w", out.SAPVersion, err)
 	}
 
 	config.Version = uint32(version)

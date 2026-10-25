@@ -41,16 +41,13 @@ func prepareArchitectureLibrary(base, imageSize, imports uintptr) error {
 	if err != nil {
 		return err
 	}
-
 	replacement, err := allocateAMD64Longjmp()
 	if err != nil {
 		return err
 	}
-
 	if err := replaceImport(longjmp, replacement); err != nil {
 		return fmt.Errorf("replace longjmp import: %w", err)
 	}
-
 	return nil
 }
 
@@ -69,7 +66,6 @@ func allocateAMD64Longjmp() (uintptr, error) {
 	if address == 0 {
 		return 0, fmt.Errorf("allocate compatible longjmp: %w", allocErr)
 	}
-
 	release := func() {
 		_, _, _ = virtualFree.Call(address, 0, memRelease)
 	}
@@ -77,7 +73,6 @@ func allocateAMD64Longjmp() (uintptr, error) {
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(address)), len(amd64Longjmp)), amd64Longjmp)
 
 	var oldProtection uint32
-
 	result, _, protectErr := virtualProtect.Call(
 		address,
 		uintptr(len(amd64Longjmp)),
@@ -90,7 +85,6 @@ func allocateAMD64Longjmp() (uintptr, error) {
 	}
 
 	process, _, _ := getCurrentProcess.Call()
-
 	result, _, flushErr := flushInstructionCache.Call(process, address, uintptr(len(amd64Longjmp)))
 	if result == 0 {
 		release()
@@ -98,6 +92,5 @@ func allocateAMD64Longjmp() (uintptr, error) {
 	}
 
 	amd64LongjmpAddress = address
-
 	return address, nil
 }

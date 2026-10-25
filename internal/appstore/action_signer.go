@@ -2,7 +2,9 @@ package appstore
 
 import (
 	"context"
+	"fmt"
 
+	apphttp "github.com/londek/ipadecrypt/internal/apphttp"
 	"github.com/londek/ipadecrypt/internal/sap"
 )
 
@@ -18,7 +20,7 @@ type SAPConfig struct {
 
 // ActionSigner signs App Store request bodies with a virtual machine identity.
 type ActionSigner interface {
-	Sign(data []byte) ([]byte, error)
+	apphttp.ActionSigner
 	Close() error
 }
 
@@ -26,13 +28,23 @@ type ActionSigner interface {
 // machine id (the MAC address bytes).
 type ActionSignerFactory func(config SAPConfig, machineID []byte) (ActionSigner, error)
 
-// defaultActionSignerFactory is the built-in SAP signer backed by Apple's
-// FairPlay runtime.
-func defaultActionSignerFactory(config SAPConfig, machineID []byte) (ActionSigner, error) {
-	return sap.NewSigner(context.Background(), sap.Config{
-		SetupURL:       config.SetupURL,
-		CertificateURL: config.CertificateURL,
-		Version:        config.Version,
-		HardwareID:     machineID,
-	})
+// frameworkActionSignerFactory is the built-in SAP signer backed by Apple's
+// FairPlay runtime. Its setup/certificate exchange runs through the emulated
+// AppleMediaServices backend (client), so it is attested like every other store
+// request.
+func frameworkActionSignerFactory(client apphttp.Executor) ActionSignerFactory {
+	return func(config SAPConfig, machineID []byte) (ActionSigner, error) {
+		signer, err := sap.NewSigner(context.Background(), sap.Config{
+			SetupURL:       config.SetupURL,
+			CertificateURL: config.CertificateURL,
+			Version:        config.Version,
+			HardwareID:     machineID,
+			HTTPClient:     client,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create SAP signer: %w", err)
+		}
+
+		return signer, nil
+	}
 }

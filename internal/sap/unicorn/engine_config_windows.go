@@ -18,6 +18,5 @@ func configureEngine(engine *Engine) error {
 	if err := engine.err(engine.api.ctl(engine.handle, control, tcgBufferSize)); err != nil {
 		return fmt.Errorf("configure Unicorn translation buffer: %w", err)
 	}
-
 	return nil
 }

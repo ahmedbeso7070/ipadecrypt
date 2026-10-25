@@ -1,8 +1,10 @@
 package unicorn
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,61 +12,57 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
-	"time"
+	"strings"
 )
 
 const maxArtifactSize = 64 << 20
 
-var artifactHTTPClient = &http.Client{Timeout: 2 * time.Minute}
-
-type runtimePaths struct {
-	library      string
-	dependencies []string
+func linuxUsesMusl() bool {
+	return linuxUsesMuslFor("/proc/self/exe", muslLoaderInstalled)
 }
 
-func cachedRuntimePaths(ctx context.Context) (runtimePaths, error) {
-	goos := runtime.GOOS
-	if goos == "linux" && linuxUsesMusl() {
-		goos = "linux-musl"
+func linuxUsesMuslFor(executable string, loaderInstalled func() bool) bool {
+	if interpreter, ok := executableInterpreter(executable); ok {
+		return interpreterUsesMusl(interpreter)
 	}
 
-	selected, err := artifactFor(goos, runtime.GOARCH)
+	return loaderInstalled()
+}
+
+// executableInterpreter reads the loader recorded in the executable. Missing PT_INTERP or
+// an unreadable executable leaves the caller to fall back to the host filesystem heuristic.
+func executableInterpreter(path string) (string, bool) {
+	file, err := elf.Open(path)
 	if err != nil {
-		return runtimePaths{}, err
+		return "", false
 	}
+	defer file.Close()
 
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return runtimePaths{}, fmt.Errorf("locate user cache: %w", err)
-	}
-
-	root := filepath.Join(cache, "ipatool", "unicorn", unicornVersion)
-	paths := runtimePaths{dependencies: make([]string, 0, len(selected.dependencies))}
-
-	for _, dependency := range selected.dependencies {
-		path, err := ensureLibrary(ctx, root, dependency, artifactHTTPClient)
-		if err != nil {
-			return runtimePaths{}, err
+	for _, program := range file.Progs {
+		if program.Type != elf.PT_INTERP {
+			continue
 		}
 
-		paths.dependencies = append(paths.dependencies, path)
+		interpreter, err := io.ReadAll(program.Open())
+		if err != nil || uint64(len(interpreter)) != program.Filesz {
+			return "", false
+		}
+
+		return string(bytes.TrimRight(interpreter, "\x00")), true
 	}
 
-	paths.library, err = ensureLibrary(ctx, root, selected, artifactHTTPClient)
-	if err != nil {
-		return runtimePaths{}, err
-	}
-
-	paths.library, err = prepareRuntimeLibrary(paths.library)
-	if err != nil {
-		return runtimePaths{}, err
-	}
-
-	return paths, nil
+	return "", false
 }
 
-func linuxUsesMusl() bool {
+func interpreterUsesMusl(interpreter string) bool {
+	return strings.HasPrefix(filepath.Base(interpreter), "ld-musl-")
+}
+
+// muslLoaderInstalled reports whether a musl loader exists on the host. That only says musl is
+// available, not that this process uses it, so it is a last resort when the interpreter is
+// unavailable. glibc distributions package musl for cross compilation, and selecting the
+// musllinux artifact there loads a second libc into the process.
+func muslLoaderInstalled() bool {
 	loaders, _ := filepath.Glob("/lib/ld-musl-*.so.1")
 	if len(loaders) != 0 {
 		return true
@@ -127,7 +125,7 @@ func downloadArtifact(ctx context.Context, directory string, selected artifact, 
 		return "", fmt.Errorf("create Unicorn download request: %w", err)
 	}
 
-	request.Header.Set("User-Agent", "ipatool Unicorn runtime downloader")
+	request.Header.Set("User-Agent", "ipadecrypt Unicorn runtime downloader")
 
 	response, err := client.Do(request)
 	if err != nil {

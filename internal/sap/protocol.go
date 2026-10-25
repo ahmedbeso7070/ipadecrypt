@@ -9,12 +9,9 @@ import (
 	"net/http"
 
 	"howett.net/plist"
-)
 
-// sapUserAgent mirrors the Configurator client identity used throughout the
-// App Store protocol. Kept local so the sap package does not import the
-// appstore package (which imports sap - would be an import cycle).
-const sapUserAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+	apphttp "github.com/londek/ipadecrypt/internal/apphttp"
+)
 
 const (
 	setupCertificateKey = "sign-sap-setup-cert"
@@ -23,7 +20,9 @@ const (
 )
 
 type setupProtocol struct {
-	client *http.Client
+	client interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 func (p setupProtocol) certificate(ctx context.Context, endpoint string) ([]byte, error) {
@@ -32,7 +31,7 @@ func (p setupProtocol) certificate(ctx context.Context, endpoint string) ([]byte
 		return nil, fmt.Errorf("create SAP certificate request: %w", err)
 	}
 
-	request.Header.Set("User-Agent", sapUserAgent)
+	request.Header.Set("User-Agent", apphttp.DefaultUserAgent)
 
 	body, err := p.send(request)
 	if err != nil {
@@ -54,7 +53,7 @@ func (p setupProtocol) exchange(ctx context.Context, endpoint string, input []by
 	}
 
 	request.Header.Set("Content-Type", "application/x-plist")
-	request.Header.Set("User-Agent", sapUserAgent)
+	request.Header.Set("User-Agent", apphttp.DefaultUserAgent)
 
 	body, err := p.send(request)
 	if err != nil {
