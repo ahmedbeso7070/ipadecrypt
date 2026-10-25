@@ -42,12 +42,10 @@ offline.
 
 Download a prebuilt binary from the [releases page](https://github.com/londek/ipadecrypt/releases/latest).
 
-Using go install. `@latest` resolves to the newest **stable** tag and skips
-pre-releases, so during the release-candidate phase pin the version explicitly
-(an older stable build predates App Store machine-signing and fails to log in):
+Using go install:
 
 ```sh
-go install github.com/londek/ipadecrypt/cmd/ipadecrypt@v0.9.0-rc1
+go install github.com/londek/ipadecrypt/cmd/ipadecrypt@latest
 ```
 
 From source (refer to [BUILDING.md](BUILDING.md) for detailed instructions):
