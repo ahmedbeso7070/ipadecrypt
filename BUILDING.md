@@ -1,6 +1,6 @@
 # Building ipadecrypt
 
-ipadecrypt has two parts:
+ipadecrypt has three parts:
 
 - **`ipadecrypt` CLI** - Go binary that runs on your computer. This is all you
   need for everyday development and for decrypting apps.
@@ -8,6 +8,11 @@ ipadecrypt has two parts:
   (`credential.ios`, `driver.ios`, `trigger.ios`) plus two data blobs, embedded
   into the CLI with `go:embed` and pushed to a jailbroken device only during the
   one-time `bootstrap` credential mint.
+- **On-device decrypt helper** - a signed arm64 iOS program
+  (`internal/device/ipadecrypt-helper-arm64`, `go:embed`ed from the C sources in
+  `helper/`). Pushed to a jailbroken device only for the on-device fallback that
+  decrypts old apps still shipping a 32-bit slice, which the arm64-only offline
+  decryptor can't handle.
 
 ## Prerequisites
 
@@ -63,3 +68,28 @@ blobs into `internal/credmint/bundle/`, and fails if any program is still a
 placeholder. Commit the refreshed bundle. The build is byte-reproducible, and
 the [`credmint bundle drift`](.github/workflows/credmint-bundle.yml) CI job
 rebuilds from the pinned sources and byte-compares against the committed bundle.
+
+## Rebuild the on-device decrypt helper
+
+Only needed when the C sources under `helper/` change. Like the mint bundle it
+builds on **Linux or macOS via Docker** (no Xcode) in a pinned toolchain image -
+`clang` targeting `arm64-apple-ios`, an iPhoneOS SDK, and `ldid` for ad-hoc
+signing with `helper/entitlements.plist`.
+
+```sh
+# uses/pulls the published toolchain image:
+./helper/build.sh
+
+# or build the toolchain image locally from helper/Dockerfile first:
+IPADECRYPT_TOOLCHAIN_IMAGE=build ./helper/build.sh
+```
+
+This writes `helper/dist/ipadecrypt-helper-arm64`. Copy it over the embedded
+copy and commit it:
+
+```sh
+cp helper/dist/ipadecrypt-helper-arm64 internal/device/ipadecrypt-helper-arm64
+```
+
+The committed binary matches the `helper/` sources, so a plain `go build` is
+fully decrypt-capable without this step.

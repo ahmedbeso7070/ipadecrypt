@@ -34,13 +34,18 @@ var (
 	bootstrapSkipLogin bool
 	bootstrapRemint    bool
 
-	decryptExtVerID    string
-	decryptOutput      string
-	decryptStorefront  string
-	decryptNoVerify    bool
-	decryptExtraVerify bool
-	decryptSkipAppex   bool
-	decryptVerbose     bool
+	decryptExtVerID       string
+	decryptOutput         string
+	decryptStorefront     string
+	decryptNoVerify       bool
+	decryptExtraVerify    bool
+	decryptSkipAppex      bool
+	decryptVerbose        bool
+	decryptOnDevice       bool
+	decryptNoOnDevice     bool
+	decryptNoUninstall    bool
+	decryptForceUninstall bool
+	decryptPatchDevType   bool
 
 	versionsStorefront   string
 	versionsLogResponses bool
@@ -81,6 +86,11 @@ func main() {
 	decrypt.Flags().BoolVar(&decryptExtraVerify, "extra-verify", false, "also byte-compare every output Mach-O against its source counterpart (outside the encrypted region) to catch decrypt corruption")
 	decrypt.Flags().BoolVar(&decryptSkipAppex, "skip-appex", false, "skip Payload/<App>.app/PlugIns/*.appex; extensions stay encrypted in the output IPA")
 	decrypt.Flags().BoolVarP(&decryptVerbose, "verbose", "v", false, "print extra detail (e.g. the output path) during decryption")
+	decrypt.Flags().BoolVar(&decryptOnDevice, "on-device", false, "decrypt on the jailbroken device instead of offline (required for old builds that still ship a 32-bit slice)")
+	decrypt.Flags().BoolVar(&decryptNoOnDevice, "no-on-device", false, "never fall back to the device; fail if offline decryption can't fully decrypt the app")
+	decrypt.Flags().BoolVar(&decryptForceUninstall, "force-uninstall", false, "always uninstall the app from the device after an on-device decrypt")
+	decrypt.Flags().BoolVar(&decryptNoUninstall, "no-uninstall", false, "never uninstall the app from the device after an on-device decrypt")
+	decrypt.Flags().BoolVar(&decryptPatchDevType, "patch-device-type", false, "expand UIDeviceFamily so an app for a different device type still installs on the device")
 
 	versions := &cobra.Command{
 		Use:   "versions <bundle-id|app-store-id|app-store-url>",

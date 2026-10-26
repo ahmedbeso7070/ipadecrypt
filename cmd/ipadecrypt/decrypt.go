@@ -125,6 +125,16 @@ func humanBytes(n int64) string {
 }
 
 func decryptHandler(cmd *cobra.Command, args []string) {
+	if decryptOnDevice && decryptNoOnDevice {
+		tui.Err("--on-device and --no-on-device are mutually exclusive; pass at most one.")
+		return
+	}
+
+	if decryptForceUninstall && decryptNoUninstall {
+		tui.Err("--force-uninstall and --no-uninstall are mutually exclusive; pass at most one.")
+		return
+	}
+
 	cfg, paths, err := loadConfigOrDefault(rootDirOverride)
 	if err != nil {
 		tui.Err("%v", err)
@@ -140,20 +150,26 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	dsid := cfg.Apple.DirectoryServicesIdentifier
-	if dsid == "" {
-		tui.Err("no Apple account configured")
-		tui.Info("run `ipadecrypt bootstrap` to sign in and mint your decryption credential")
+	// The decryption credential is required only for the offline path;
+	// --on-device decrypts via the device's own FairPlay and skips it.
+	var credential []byte
 
-		return
-	}
+	if !decryptOnDevice {
+		dsid := cfg.Apple.DirectoryServicesIdentifier
+		if dsid == "" {
+			tui.Err("no Apple account configured")
+			tui.Info("run `ipadecrypt bootstrap` to sign in and mint your decryption credential")
 
-	credential, err := loadCachedCredential(paths, dsid)
-	if err != nil {
-		tui.Err("no decryption credential for this account: %v", err)
-		tui.Info("run `ipadecrypt bootstrap` to mint it (one-time, needs your jailbroken device)")
+			return
+		}
 
-		return
+		credential, err = loadCachedCredential(paths, dsid)
+		if err != nil {
+			tui.Err("no decryption credential for this account: %v", err)
+			tui.Info("run `ipadecrypt bootstrap` to mint it (one-time, needs your jailbroken device)")
+
+			return
+		}
 	}
 
 	cleanups := &cleanupStack{}
@@ -294,7 +310,9 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 	}
 
 	//
-	// Offline FairPlay decryption (no device).
+	// Decrypt: offline FairPlay first (no device); fall back to on-device
+	// decryption for apps the arm64-only offline path can't fully handle
+	// (e.g. old builds that still ship a 32-bit slice).
 	//
 
 	outLocal, err := localOutputPath(decryptOutput, appBundleID, appVersion)
@@ -308,21 +326,72 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	outFile, err := os.OpenFile(outLocal, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		tui.Err("open local: %v", err)
+	deviceConfigured := cfg.Device.Host != "" || cfg.Device.USB
+
+	if !decryptOnDevice {
+		switch attemptOfflineDecrypt(encPath, credential, outLocal) {
+		case offlineDone, offlineFatal:
+			return
+		}
+
+		// offlineNeedsDevice: the offline arm64 decrypt left a slice
+		// encrypted (or couldn't handle the app). Decide on the fallback.
+		switch {
+		case decryptNoOnDevice:
+			tui.Warn("offline decrypt left encrypted slice(s); on-device fallback suppressed (--no-on-device)")
+			return
+		case !deviceConfigured:
+			tui.Err("offline decryption couldn't fully decrypt this app (commonly an old build that still ships a 32-bit slice); on-device decryption is required")
+			tui.Info("run `ipadecrypt bootstrap` to set up your jailbroken device, then re-run")
+
+			return
+		}
+
+		tui.Info("falling back to on-device decryption")
+	} else if !deviceConfigured {
+		tui.Err("--on-device needs a configured jailbroken device")
+		tui.Info("run `ipadecrypt bootstrap` to set one up")
+
 		return
 	}
 
-	abandonLocal := true
+	if err := runDeviceDecrypt(cfg, cleanups, encPath, appBundleID, appVersion, outLocal); err != nil {
+		return
+	}
+}
 
-	cleanups.push(func() {
+type offlineOutcome int
+
+const (
+	offlineDone offlineOutcome = iota
+	offlineNeedsDevice
+	offlineFatal
+)
+
+// attemptOfflineDecrypt runs the no-device FairPlay decrypt into outLocal and
+// verifies it. It returns offlineDone when the output verifies, offlineFatal
+// for an error already surfaced to the user (e.g. a credential that belongs to
+// a different account), and offlineNeedsDevice when the arm64-only offline path
+// couldn't fully decrypt the app (a still-encrypted 32-bit slice, or an app it
+// can't parse) - the caller then decides whether to fall back to the device.
+// On any non-done outcome the partial output is removed so a fallback writes a
+// clean file.
+func attemptOfflineDecrypt(encPath string, credential []byte, outLocal string) offlineOutcome {
+	outFile, err := os.OpenFile(outLocal, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		tui.Err("open local: %v", err)
+		return offlineFatal
+	}
+
+	keep := false
+
+	defer func() {
 		outFile.Close()
 
-		if abandonLocal {
+		if !keep {
 			os.Remove(outLocal)
 		}
-	})
+	}()
 
 	live := tui.NewLive()
 	live.Spin("decrypting %s", filepath.Base(encPath))
@@ -337,33 +406,29 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 			live.Fail("decrypt failed: %v", err)
 			tui.Info("this credential belongs to a different Apple account; sign in with the account that owns the app and re-run `ipadecrypt bootstrap --remint`")
 
-			return
+			return offlineFatal
 		}
 
-		live.Fail("decrypt failed: %v", err)
+		// Offline couldn't decrypt this app at all; let the device try.
+		live.Fail("offline decrypt failed: %v", err)
 
-		return
+		return offlineNeedsDevice
 	}
 
 	if err := outFile.Sync(); err != nil {
 		live.Fail("sync local: %v", err)
-		return
+		return offlineFatal
 	}
 
 	live.OK("decrypted %d binary(s), %d page(s) (%s → %s)", summary.Binaries, summary.Pages, humanBytes(cw.n), outLocal)
-
-	abandonLocal = false
 
 	if decryptVerbose {
 		tui.Info("output: %s", outLocal)
 	}
 
-	//
-	// Verify.
-	//
-
 	if decryptNoVerify {
-		return
+		keep = true
+		return offlineDone
 	}
 
 	compareSource := decryptExtraVerify
@@ -383,28 +448,45 @@ func decryptHandler(cmd *cobra.Command, args []string) {
 	res, err := pipeline.Verify(outLocal, src, decryptSkipAppex)
 	if err != nil {
 		live.Fail("verify failed: %v", err)
-		return
+		return offlineFatal
 	}
 
-	if !res.OK() {
-		live.Fail("verify failed: %s", verifyFailureSummary(res))
+	if res.OK() {
+		live.OK("%s", verifyOKSummary(res, compareSource))
+
+		keep = true
+
+		return offlineDone
+	}
+
+	// A failure whose only symptom is still-encrypted slices is the 32-bit
+	// (armv7) gap the arm64-only offline decryptor can't close - hand it to
+	// the device fallback.
+	if len(res.StillEncrypted) > 0 && len(res.AllZeroCrypt) == 0 && len(res.Mismatches) == 0 {
+		live.Fail("%d slice(s) still encrypted (32-bit; offline decrypt is arm64-only)", len(res.StillEncrypted))
 
 		for _, n := range res.StillEncrypted {
 			tui.Info("  %s still encrypted (cryptid != 0)", n)
 		}
 
-		for _, n := range res.AllZeroCrypt {
-			tui.Info("  %s crypt region all zeros", n)
-		}
-
-		for _, m := range res.Mismatches {
-			tui.Info("  %s %s", m.Name, m.Reason)
-		}
-
-		return
+		return offlineNeedsDevice
 	}
 
-	live.OK("%s", verifyOKSummary(res, compareSource))
+	live.Fail("verify failed: %s", verifyFailureSummary(res))
+
+	for _, n := range res.StillEncrypted {
+		tui.Info("  %s still encrypted (cryptid != 0)", n)
+	}
+
+	for _, n := range res.AllZeroCrypt {
+		tui.Info("  %s crypt region all zeros", n)
+	}
+
+	for _, m := range res.Mismatches {
+		tui.Info("  %s %s", m.Name, m.Reason)
+	}
+
+	return offlineFatal
 }
 
 func verifyOKSummary(res pipeline.VerifyResult, compareSource bool) string {
